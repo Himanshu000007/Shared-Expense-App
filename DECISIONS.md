@@ -4,17 +4,20 @@ A log of every significant product/engineering decision, the options considered,
 
 ---
 
-## D1 — Stack: PERN (Postgres · Express · React · Node), not MERN
+## D1 — Stack: MySQL · Express · React · Node (the "M" of MERN as MySQL)
 
-**Context.** The brief mentions a "MERN" stack (M = MongoDB) but **also** mandates "Use relational DBs only" (requirement #5). MongoDB is not relational, so the two cannot both hold. The hard requirement wins.
+**Context.** The brief mentions a "MERN" stack (M = MongoDB) but **also** mandates "Use relational DBs only" (requirement #5). MongoDB is not relational, so the two cannot both hold. The hard requirement wins — the database must be relational.
 
 **Options.**
 - (a) MongoDB — violates the explicit "relational DBs only" requirement. Rejected.
-- (b) PostgreSQL with the Express / React / Node parts retained → the **PERN stack**.
+- (b) PostgreSQL + Express/React/Node.
+- (c) MySQL + Express/React/Node.
 
-**Decision: This project uses the PERN stack — PostgreSQL + Express + React + Node, with Prisma as the ORM.** The MongoDB "M" of MERN is replaced by PostgreSQL because the requirement demands a relational database, and because the domain is inherently relational and transactional: time-bounded membership, per-member split ledgers, and balance math that must sum exactly all want foreign keys, joins, and ACID transactions. Wherever the original brief said "MERN", the project as built is **PERN** — this is a deliberate, documented substitution, not an oversight.
+**Decision: (c) — MySQL + Express + React + Node, with hand-written SQL via `mysql2` (no ORM; see D17).** The relational "M" replaces MongoDB's "M", so the project keeps the MERN letters literally (M-E-R-N) while satisfying requirement #5 — MySQL is the relational store. The domain is inherently relational and transactional: time-bounded membership, per-member split ledgers, and balance math that must sum exactly all want foreign keys, joins, and ACID transactions, which MySQL (InnoDB) provides.
 
-**Trade-off / risk.** A reviewer skimming for the literal word "MongoDB" might flag it. Mitigation: this entry and the README state the PERN choice up front so the swap reads as an engineering decision driven by requirement #5.
+**Why MySQL over Postgres (b).** Both are valid relational choices and would meet the requirement; Postgres has edges (richer JSON, native UUID, stricter historical `CHECK` support). MySQL was chosen as a deliberate preference: it is the database I know most deeply and can fully explain line-by-line in the live session, and MySQL 8 (InnoDB) covers everything this app needs — transactions, foreign keys, JSON columns for the import-staging payloads, and CTEs/window functions for balance queries. "Choose what you can defend completely" outweighs Postgres's marginal feature edge here.
+
+**Trade-off / risk.** MySQL has no `RETURNING` clause, so inserts generate the UUID in the app (`crypto.randomUUID`) and read the row back; and `CHECK`/JSON ergonomics are slightly weaker than Postgres. Accepted and handled in code (see D17).
 
 ---
 
@@ -152,37 +155,41 @@ A log of every significant product/engineering decision, the options considered,
 
 ---
 
-## D16 — MVC / layered architecture across the whole project
+## D16 — Pragmatic feature-file structure (not folder-per-layer MVC)
 
 **Context.** The live evaluation says they can "point at any line and ask why it exists." That rewards a predictable structure where responsibility for each line is obvious, over ad-hoc code where logic lives wherever it was first typed.
 
-**Options.** (a) route handlers that parse, validate, run business logic, and hit the DB inline; (b) a layered **MVC** separation on the backend, mirrored by a container/presentational split on the frontend.
+**Options.** (a) everything inline in route handlers (parse + validate + logic + SQL in one blob); (b) strict folder-per-layer MVC (separate `controllers/`, `services/`, `models/`, `routes/`, `validators/`, `middleware/` folders); (c) a pragmatic middle — **one file per feature** plus a few shared files, splitting out only the genuinely complex modules.
 
-**Decision: (b) MVC everywhere.** Both the backend and frontend follow a strict layered separation so every file has one job.
+**Decision: (c).** I initially built auth as (b) and it produced ~11 files for three endpoints — tracing "what happens on login" meant opening five files. That is layering for its own sake. The governing rule is now:
 
-**Backend (Express) — MVC layers:**
-- **Model** — Prisma schema + thin data-access modules. The only layer that talks to PostgreSQL.
-- **Controller** — one function per route; reads `req`, calls a service, shapes the `res`. No business logic, no SQL.
-- **Service** (business logic) — split math, balance engine, the import pipeline, FX conversion, settlement reclassification. Pure, unit-testable, framework-agnostic. **This is where the graded core lives.**
-- **Routes** — wire URLs → middleware → controllers.
-- **Middleware** — `requireAuth`, validation, error handling.
+> **Simple features → one file. The complex graded core → its own module.**
+
+A feature file is internally still ordered like layers (validation → data-access SQL → route handlers), so responsibilities stay clear, but it lives in one place you can read top-to-bottom. Cross-cutting concerns are single shared files. The heavy, gradable logic (import pipeline, split engine, balance engine) still gets its own file because it is complex and unit-tested — that is where isolation earns its keep.
+
+**Backend (Express) — flat structure:**
+- `db.js` — pg pool + `query()` helper (the only place SQL executes from).
+- `helpers.js` — `ApiError`, JWT sign/verify, `toPublicUser`, small utils.
+- `middleware.js` — `requireAuth`, `validate`, `errorHandler` together.
+- one file per feature — e.g. `auth.js` holds its zod schemas, its SQL data functions, and its router/handlers.
+- `app.js` mounts middleware + feature routers; `server.js` is the entry point.
 
 ```
 server/
   src/
-    models/         # Prisma client + data-access helpers (DB layer)
-    controllers/    # auth, group, expense, settlement, balance, import controllers
-    services/       # splitEngine, balanceEngine, importPipeline, fx, anomalyDetectors
-    routes/         # express routers, one per resource
-    middleware/     # requireAuth, validate, errorHandler
-    utils/          # money (paise), rounding (largest-remainder), date/csv parsers
-    app.js          # express app assembly
-    server.js       # entry point
-  prisma/
-    schema.prisma   # the relational model from SCOPE.md §2
-    migrations/
-  tests/            # service-layer unit tests (split math, balances, detectors)
+    schema.sql      # hand-written SQL for all tables
+    db.js           # pg pool + query()
+    helpers.js      # ApiError, signToken/verifyToken, toPublicUser
+    middleware.js   # requireAuth + validate + errorHandler
+    auth.js         # feature: schemas + SQL + router/handlers
+    groups.js       # (later) feature file
+    expenses.js     # (later) feature file
+    importPipeline.js / splitEngine.js / balanceEngine.js  # (later) complex core, isolated
+    app.js
+    server.js
+  tests/            # unit tests for the complex core (split math, balances, detectors)
 ```
+Migrations run with `npm run db:migrate` — a tiny Node runner (`src/migrate.js`) that loads `.env` and executes `schema.sql` through the `pg` pool, so no `psql` or exported shell env is required.
 
 **Frontend (React) — same spirit:**
 ```
@@ -196,7 +203,23 @@ client/
     utils/          # money formatting, date display
 ```
 
-**Rule of thumb enforced in review:** controllers contain no math; services contain no `req`/`res`; models contain no business rules. A balance bug is therefore always in `services/balanceEngine`, never scattered — which is exactly what lets me trace any anomaly to one file in the live session.
+**Rule of thumb enforced in review:** SQL lives only in data-access functions (in the feature file or `db.js`), never built ad-hoc in a handler; the complex engines stay pure (no `req`/`res`) so they're unit-testable. A balance bug is therefore always in `balanceEngine.js`, never scattered — which is exactly what lets me trace any anomaly to one file in the live session.
+
+---
+
+## D17 — Hand-written SQL via mysql2, no ORM
+
+**Context.** Data access can go through an ORM (Prisma/Sequelize) or be written as raw SQL with a driver (`mysql2`).
+
+**Options.** (a) Prisma/Sequelize — schema DSL, generated client, automatic migrations; (b) `mysql2` with hand-written, parameterized SQL and `.sql` schema files.
+
+**Decision: (b) raw SQL via `mysql2`.** The live evaluation can point at any line and ask why it exists, and can ask me to trace exactly what happens to a row. Raw parameterized SQL means there is no generated layer between me and the database — every query that runs is one I wrote and can explain, and the balance/import queries are visible verbatim rather than hidden behind an ORM's query builder. It also keeps the dependency surface small.
+
+**How injection is prevented.** Every query uses `?` placeholders with a values array; `mysql2` escapes the params, so values are never string-concatenated into SQL. Centralized in `db.js` via a `query(text, params)` helper that normalizes `mysql2`'s `[rows, fields]` return into `{ rows }`.
+
+**MySQL specifics handled in code.** MySQL has no `RETURNING`, so `INSERT` generates the UUID in the app (`crypto.randomUUID`), writes it as `CHAR(36)`, then `SELECT`s the row back. The migrate runner splits `schema.sql` on `;` and executes statements one at a time (mysql2 sends a single statement per query by default).
+
+**Trade-off / risk.** More boilerplate and manual migrations (no auto-diffing); column naming is snake_case in SQL, so rows are shaped to camelCase at the API boundary (`toPublicUser`). Accepted: explicitness and full understanding are worth more here than ORM convenience, given how the project is graded.
 
 ---
 

@@ -62,7 +62,9 @@ Rows are staged, **not inserted**. A row becomes a real Expense or Settlement on
 
 ## 2. Database Schema (PostgreSQL)
 
-Relational only. ORM: Prisma. `jsonb` is used **only** in the import-staging tables to hold raw/normalized row payloads; all committed financial data lives in fully normalized relational tables.
+Relational only — **MySQL 8 (InnoDB)**. Data access is **hand-written, parameterized SQL via `mysql2` — no ORM**; the schema is maintained as plain `.sql` files. A `JSON` column is used **only** in the import-staging tables to hold raw/normalized row payloads; all committed financial data lives in fully normalized relational tables.
+
+> **Type conventions (MySQL).** The table sketches below use generic type names; in MySQL they map to: `uuid → CHAR(36)` (generated app-side via `crypto.randomUUID`), `timestamptz → TIMESTAMP`, `text → VARCHAR/TEXT`, `citext → VARCHAR` + app-side lowercasing, `numeric → DECIMAL`, `bigint → BIGINT`, `jsonb → JSON`, `enum → ENUM(...)`. Money stays integer minor units in `BIGINT`.
 
 ### 2.1 Entity overview
 

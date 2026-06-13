@@ -4,8 +4,8 @@ A shared-expenses tracker for a group of flatmates: groups with members who join
 leave over time, multi-currency expenses with several split types, balances, settlements,
 and a CSV importer that detects and surfaces messy data instead of silently guessing.
 
-- **Stack:** PERN — **P**ostgreSQL · **E**xpress · **R**eact · **N**ode
-- **Data access:** hand-written, parameterized SQL via `node-postgres` (no ORM)
+- **Stack:** MySQL · Express · React · Node (the "M" of MERN, with MySQL as the relational store instead of MongoDB)
+- **Data access:** hand-written, parameterized SQL via `mysql2` (no ORM)
 - **AI used:** Claude (Anthropic) as the development collaborator — see `AI_USAGE.md`
 
 Project docs: [`SCOPE.md`](SCOPE.md) (anomaly log + DB schema) · [`DECISIONS.md`](DECISIONS.md) (decision log) · [`docs/api/`](docs/api) (endpoint specs).
@@ -15,86 +15,90 @@ Project docs: [`SCOPE.md`](SCOPE.md) (anomaly log + DB schema) · [`DECISIONS.md
 ## 1. Prerequisites
 
 - **Node.js** ≥ 18 (developed on v25)
-- **Homebrew** (macOS) — used to install PostgreSQL below
+- **Homebrew** (macOS) — used to install MySQL below
 
 ---
 
-## 2. Set up PostgreSQL (one time)
+## 2. Set up MySQL (one time)
 
 Pick the section for your OS. All three end with the **same** database, so the
 `.env` connection string in step 3 works regardless of which you choose.
 
+The app connects as user `root` with password `root` to a database named
+`shared_expenses` on port `3306` (this matches the default `.env`).
+
 ### 2a. macOS (Homebrew)
 
 ```bash
-# Install and start PostgreSQL 16
-brew install postgresql@16
-brew services start postgresql@16
+# Install and start MySQL 8
+brew install mysql
+brew services start mysql
 
-# Put psql / createdb on your PATH (postgresql@16 is keg-only, so not auto-linked)
-echo 'export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"' >> ~/.zshrc
+# Put the mysql client on your PATH (Homebrew may not auto-link it)
+echo 'export PATH="/opt/homebrew/opt/mysql/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 
-# Verify the client works (should print: psql (PostgreSQL) 16.x)
-psql --version
+# Verify the client works (should print: mysql  Ver 8.x)
+mysql --version
 
-# Create the database
-createdb shared_expenses
+# Homebrew's MySQL starts with root having an EMPTY password and no client
+# password prompt. Set root's password to "root" so the default .env works:
+mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY 'root'; FLUSH PRIVILEGES;"
 
-# Create a "postgres" login role so the default connection string works as-is
-psql postgres -c "CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres';"
+# Create the database (now requires the password you just set)
+mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS shared_expenses;"
 ```
 
-Postgres now runs in the background and restarts at login.
+MySQL now runs in the background and restarts at login.
 
 ### 2b. Windows
 
-**Install PostgreSQL 16.** Easiest is winget in PowerShell (or grab the installer
-from https://www.postgresql.org/download/windows/):
+**Install MySQL 8.** Easiest is winget in PowerShell (or grab the MySQL Installer
+from https://dev.mysql.com/downloads/installer/):
 
 ```powershell
-winget install -e --id PostgreSQL.PostgreSQL.16
+winget install -e --id Oracle.MySQL
 ```
 
-During the installer:
-- **Set the `postgres` superuser password to `postgres`** (so the default `.env` works).
-- Keep the **port** at **5432**.
-- The installer already creates the `postgres` login role, so no extra role step is needed.
+During the MySQL Installer:
+- **Set the `root` password to `root`** (so the default `.env` works).
+- Keep the **port** at **3306**.
 
-**Add the tools to your PATH** so `psql` / `createdb` work in any terminal. In PowerShell:
+**Add the client to your PATH** so `mysql` works in any terminal. In PowerShell
+(adjust `8.0` to your installed version folder):
 
 ```powershell
 # For this session only:
-$env:Path += ";C:\Program Files\PostgreSQL\16\bin"
+$env:Path += ";C:\Program Files\MySQL\MySQL Server 8.0\bin"
 
 # Or permanently (new terminals will pick it up):
-setx PATH "$($env:Path);C:\Program Files\PostgreSQL\16\bin"
+setx PATH "$($env:Path);C:\Program Files\MySQL\MySQL Server 8.0\bin"
 
-# Verify (should print: psql (PostgreSQL) 16.x)
-psql --version
+# Verify (should print: mysql  Ver 8.x)
+mysql --version
 ```
 
-**Create the database** (it will prompt for the `postgres` password you set — `postgres`):
+**Create the database** (enter the `root` password `root` when prompted):
 
 ```powershell
-createdb -U postgres shared_expenses
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS shared_expenses;"
 ```
 
-> Don't want to touch PATH? Use the **"SQL Shell (psql)"** app the installer adds
-> from the Start menu, then run: `CREATE DATABASE shared_expenses;`
+> Prefer a GUI? Open **MySQL Workbench** (installed alongside) and run:
+> `CREATE DATABASE shared_expenses;`
 
 ### 2c. Any OS — Docker (alternative)
 
 If you have Docker, skip the native install entirely:
 
 ```bash
-docker run --name se-postgres \
-  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=shared_expenses \
-  -p 5432:5432 -d postgres:16
+docker run --name se-mysql \
+  -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=shared_expenses \
+  -p 3306:3306 -d mysql:8
 ```
 
-This creates the `postgres` user, the password `postgres`, and the
-`shared_expenses` database in one go.
+This creates the `root` user with password `root` and the `shared_expenses`
+database in one go. (Give it ~20s to finish starting before migrating.)
 
 ---
 
@@ -109,7 +113,7 @@ cp .env.example .env
 The default `.env` already matches the database created above:
 
 ```
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/shared_expenses"
+DATABASE_URL="mysql://root:root@localhost:3306/shared_expenses"
 JWT_SECRET="change-me-to-a-long-random-string"
 JWT_TTL="7d"
 PORT=4000
