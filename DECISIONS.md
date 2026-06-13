@@ -4,17 +4,17 @@ A log of every significant product/engineering decision, the options considered,
 
 ---
 
-## D1 — Relational DB over MongoDB, despite "MERN"
+## D1 — Stack: PERN (Postgres · Express · React · Node), not MERN
 
-**Context.** The brief says "MERN stack" (M = MongoDB) but **also** mandates "Use relational DBs only" (requirement #5). These two instructions directly conflict.
+**Context.** The brief mentions a "MERN" stack (M = MongoDB) but **also** mandates "Use relational DBs only" (requirement #5). MongoDB is not relational, so the two cannot both hold. The hard requirement wins.
 
 **Options.**
-- (a) MongoDB, ignore the relational mandate.
-- (b) PostgreSQL + Prisma, keep the **E/R/N** (Express, React, Node) of MERN.
+- (a) MongoDB — violates the explicit "relational DBs only" requirement. Rejected.
+- (b) PostgreSQL with the Express / React / Node parts retained → the **PERN stack**.
 
-**Decision: (b) PostgreSQL.** The explicit hard requirement ("relational DBs only") outranks the stack nickname. The domain is also inherently relational and transactional: time-bounded membership, per-member split ledgers, and balance math that must sum exactly all want foreign keys, joins, and ACID transactions. I keep React + Express + Node, so it is "MERN with Postgres" (effectively PERN).
+**Decision: This project uses the PERN stack — PostgreSQL + Express + React + Node, with Prisma as the ORM.** The MongoDB "M" of MERN is replaced by PostgreSQL because the requirement demands a relational database, and because the domain is inherently relational and transactional: time-bounded membership, per-member split ledgers, and balance math that must sum exactly all want foreign keys, joins, and ACID transactions. Wherever the original brief said "MERN", the project as built is **PERN** — this is a deliberate, documented substitution, not an oversight.
 
-**Trade-off / risk.** A reviewer expecting literal MongoDB might flag it. Mitigation: this entry documents the conflict explicitly so it reads as a deliberate decision, not an oversight.
+**Trade-off / risk.** A reviewer skimming for the literal word "MongoDB" might flag it. Mitigation: this entry and the README state the PERN choice up front so the swap reads as an engineering decision driven by requirement #5.
 
 ---
 
@@ -149,6 +149,54 @@ A log of every significant product/engineering decision, the options considered,
 ## D15 — Deployment topology
 
 **Decision.** Frontend (Vite/React static build) on Vercel or Netlify; Express/Node API + managed PostgreSQL on Render or Railway. Rationale: free tiers, managed Postgres with backups, and independent scaling of static frontend vs API. Single public URL for the app (requirement #1), with the API behind `/api`.
+
+---
+
+## D16 — MVC / layered architecture across the whole project
+
+**Context.** The live evaluation says they can "point at any line and ask why it exists." That rewards a predictable structure where responsibility for each line is obvious, over ad-hoc code where logic lives wherever it was first typed.
+
+**Options.** (a) route handlers that parse, validate, run business logic, and hit the DB inline; (b) a layered **MVC** separation on the backend, mirrored by a container/presentational split on the frontend.
+
+**Decision: (b) MVC everywhere.** Both the backend and frontend follow a strict layered separation so every file has one job.
+
+**Backend (Express) — MVC layers:**
+- **Model** — Prisma schema + thin data-access modules. The only layer that talks to PostgreSQL.
+- **Controller** — one function per route; reads `req`, calls a service, shapes the `res`. No business logic, no SQL.
+- **Service** (business logic) — split math, balance engine, the import pipeline, FX conversion, settlement reclassification. Pure, unit-testable, framework-agnostic. **This is where the graded core lives.**
+- **Routes** — wire URLs → middleware → controllers.
+- **Middleware** — `requireAuth`, validation, error handling.
+
+```
+server/
+  src/
+    models/         # Prisma client + data-access helpers (DB layer)
+    controllers/    # auth, group, expense, settlement, balance, import controllers
+    services/       # splitEngine, balanceEngine, importPipeline, fx, anomalyDetectors
+    routes/         # express routers, one per resource
+    middleware/     # requireAuth, validate, errorHandler
+    utils/          # money (paise), rounding (largest-remainder), date/csv parsers
+    app.js          # express app assembly
+    server.js       # entry point
+  prisma/
+    schema.prisma   # the relational model from SCOPE.md §2
+    migrations/
+  tests/            # service-layer unit tests (split math, balances, detectors)
+```
+
+**Frontend (React) — same spirit:**
+```
+client/
+  src/
+    pages/          # route-level views (Login, Groups, GroupDetail, ImportReview)
+    components/     # presentational, reusable UI
+    services/api/   # one module per backend resource (auth, groups, expenses, import)
+    context/        # auth/session state
+    hooks/          # data-fetching hooks
+    utils/          # money formatting, date display
+```
+
+**Rule of thumb enforced in review:** controllers contain no math; services contain no `req`/`res`; models contain no business rules. A balance bug is therefore always in `services/balanceEngine`, never scattered — which is exactly what lets me trace any anomaly to one file in the live session.
 
 ---
 
