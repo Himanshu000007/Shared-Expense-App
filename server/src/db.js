@@ -1,12 +1,14 @@
-// node-postgres connection pool + a thin query() helper. No ORM — every query
-// in the app is hand-written, parameterized SQL.
+// MySQL connection pool (mysql2) + a thin query() helper. No ORM — every query
+// in the app is hand-written SQL with `?` placeholders (mysql2 escapes the
+// params array, which is what prevents SQL injection).
 import 'dotenv/config';
-import pg from 'pg';
+import mysql from 'mysql2/promise';
 
-const { Pool } = pg;
+export const pool = mysql.createPool(process.env.DATABASE_URL);
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-// Always pass values as the params array ($1, $2, …), never string-interpolated
-// into the SQL text. This is what prevents SQL injection.
-export const query = (text, params) => pool.query(text, params);
+// mysql2 returns [rows, fields]; we expose { rows } so callers read results
+// the same way everywhere. For INSERT/UPDATE, `rows` is the result header.
+export const query = async (text, params) => {
+  const [rows] = await pool.query(text, params);
+  return { rows };
+};

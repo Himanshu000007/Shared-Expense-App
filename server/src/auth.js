@@ -3,6 +3,7 @@
 //   2. data access (hand-written SQL)
 //   3. routes + handlers
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { query } from './db.js';
@@ -25,23 +26,24 @@ const loginSchema = z.object({
 
 // --- 2. data access (raw SQL) ----------------------------------------------
 async function findUserByEmail(email) {
-  const { rows } = await query('SELECT * FROM users WHERE email = $1', [email]);
+  const { rows } = await query('SELECT * FROM users WHERE email = ?', [email]);
   return rows[0] || null;
 }
 
 async function findUserById(id) {
-  const { rows } = await query('SELECT * FROM users WHERE id = $1', [id]);
+  const { rows } = await query('SELECT * FROM users WHERE id = ?', [id]);
   return rows[0] || null;
 }
 
 async function createUser({ name, email, passwordHash }) {
-  const { rows } = await query(
-    `INSERT INTO users (name, email, password_hash)
-     VALUES ($1, $2, $3)
-     RETURNING *`,
-    [name, email, passwordHash]
+  // MySQL has no RETURNING: generate the UUID here, insert it, then read back.
+  const id = randomUUID();
+  await query(
+    `INSERT INTO users (id, name, email, password_hash)
+     VALUES (?, ?, ?, ?)`,
+    [id, name, email, passwordHash]
   );
-  return rows[0];
+  return findUserById(id);
 }
 
 // --- 3. routes -------------------------------------------------------------
