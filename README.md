@@ -137,7 +137,20 @@ npm run dev
 
 The API is now live at **http://localhost:4000**. Leave this terminal running.
 
-> Frontend (`client/`) will be added later; this section will be updated when it is.
+### Frontend (`client/`)
+
+In a **separate terminal** (keep the API running):
+```bash
+cd client
+npm install
+npm run dev
+```
+Open **http://localhost:5173**. The dev server proxies `/api` to the backend on
+:4000, so no extra config is needed locally. Register an account, create a group,
+add members, add expenses, view balances, and import the CSV from the Import tab.
+
+> For a production build: `npm run build` (output in `client/dist/`); set
+> `VITE_API_URL` to the deployed API origin.
 
 ---
 
@@ -230,4 +243,5 @@ node scripts/review.mjs   # proves a flagged row stays out of commit until appro
 - [x] Expenses + all four split types + multi-currency + refunds
 - [x] Settlements + balances (net, simplified, itemized)
 - [x] CSV import + anomaly detection + review/approve + commit + Import Report
-- [ ] Frontend (`client/`)
+- [x] Frontend (`client/`) — login, groups, members, expenses, balances, import review UI
+- [ ] Deployment (public URL)
