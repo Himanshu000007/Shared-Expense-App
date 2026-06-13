@@ -196,11 +196,38 @@ curl -s -X POST localhost:4000/api/auth/register -H 'Content-Type: application/j
 
 ---
 
+## API endpoints
+
+| Area | Endpoints |
+|---|---|
+| Auth | `POST /api/auth/register` · `POST /api/auth/login` · `GET /api/auth/me` |
+| Groups | `POST /api/groups` · `GET /api/groups` · `GET /api/groups/:id` |
+| Members | `GET /api/groups/:id/members` · `POST /api/groups/:id/members` · `PATCH /api/groups/:id/members/:memberId` |
+| Expenses | `POST /api/groups/:id/expenses` · `GET /api/groups/:id/expenses` · `GET /api/expenses/:id` |
+| Settlements | `POST /api/groups/:id/settlements` · `GET /api/groups/:id/settlements` |
+| Balances | `GET /api/groups/:id/balances` · `GET /api/groups/:id/balances/simplified` · `GET /api/groups/:id/members/:memberId/balance` |
+| Import | `POST /api/groups/:id/import` (CSV upload) · `GET /api/imports/:id/report` · `GET /api/imports/:id` · `PATCH /api/imports/:id/rows/:rowId` · `POST /api/imports/:id/commit` |
+
+Expenses support all four split types (`equal`, `unequal`, `percentage`, `share`),
+multi-currency conversion (USD→base via `exchange_rates`), refunds, and reject
+participants outside their `[joined_at, left_at]` membership window.
+
+The import flow stages every CSV row, detects the data anomalies (see `SCOPE.md`),
+holds rows that need a human decision out of the commit (nothing is changed
+without approval), and produces an Import Report.
+
+**Run the backend flows end-to-end** (server must be running):
+```bash
+node scripts/smoke.mjs    # group, all split types, USD, refund, settlement, balances (26 checks)
+node scripts/import.mjs   # imports the real expenses_export.csv, prints the anomaly report + commit
+node scripts/review.mjs   # proves a flagged row stays out of commit until approved
+```
+
 ## Project status
 
 - [x] Auth — register / login / me (JWT + bcrypt)
-- [ ] Groups + time-bounded membership
-- [ ] Expenses + split types
-- [ ] Balances + settlements
-- [ ] CSV import + anomaly report
+- [x] Groups + time-bounded membership
+- [x] Expenses + all four split types + multi-currency + refunds
+- [x] Settlements + balances (net, simplified, itemized)
+- [x] CSV import + anomaly detection + review/approve + commit + Import Report
 - [ ] Frontend (`client/`)
