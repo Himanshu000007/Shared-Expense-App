@@ -60,11 +60,19 @@ Rows are staged, **not inserted**. A row becomes a real Expense or Settlement on
 
 ---
 
-## 2. Database Schema (PostgreSQL)
+## 2. Database Schema (MySQL 8)
 
-Relational only — **MySQL 8 (InnoDB)**. Data access is **hand-written, parameterized SQL via `mysql2` — no ORM**; the schema is maintained as plain `.sql` files. A `JSON` column is used **only** in the import-staging tables to hold raw/normalized row payloads; all committed financial data lives in fully normalized relational tables.
+Relational only — **MySQL 8 (InnoDB)**. Data access is performed using hand-written, parameterized SQL through `mysql2` (no ORM). The schema is maintained as plain SQL migration files. A `JSON` column is used only in import-staging tables for raw and normalized row payloads; all committed financial data is stored in normalized relational tables.
 
-> **Type conventions (MySQL).** The table sketches below use generic type names; in MySQL they map to: `uuid → CHAR(36)` (generated app-side via `crypto.randomUUID`), `timestamptz → TIMESTAMP`, `text → VARCHAR/TEXT`, `citext → VARCHAR` + app-side lowercasing, `numeric → DECIMAL`, `bigint → BIGINT`, `jsonb → JSON`, `enum → ENUM(...)`. Money stays integer minor units in `BIGINT`.
+> **Type conventions (MySQL).**
+>
+> - UUIDs are generated application-side using `crypto.randomUUID()` and stored as `CHAR(36)`.
+> - Timestamps use `TIMESTAMP`.
+> - Variable text uses `VARCHAR` or `TEXT`.
+> - Monetary values use `BIGINT` and are stored in minor units (paise).
+> - Decimal values such as exchange rates use `DECIMAL`.
+> - Structured staging payloads use MySQL's native `JSON` type.
+> - Enumerated values use MySQL `ENUM`.
 
 ### 2.1 Entity overview
 
@@ -89,9 +97,9 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 |---|---|---|
 | id | uuid PK | |
 | name | text | |
-| email | citext UNIQUE | |
+| email | VARCHAR(255) UNIQUE | |
 | password_hash | text | bcrypt |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 **`groups`**
 | column | type | notes |
@@ -100,7 +108,7 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | name | text | |
 | base_currency | char(3) | default `INR` |
 | created_by | uuid FK→users | |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 **`group_members`** — a person *within a group*. May be a registered user, or a guest (Dev/Kabir) with `user_id = NULL`. Membership is time-bounded.
 | column | type | notes |
@@ -112,7 +120,7 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | is_guest | boolean | true for Dev, Kabir |
 | joined_at | date | membership window start |
 | left_at | date NULL | NULL ⇒ still a member |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 **`member_aliases`** — maps messy CSV names to a canonical member (anomaly #8).
 | column | type | notes |
@@ -128,10 +136,10 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | id | uuid PK | |
 | base_currency | char(3) | e.g. `USD` |
 | quote_currency | char(3) | e.g. `INR` |
-| rate | numeric(18,6) | 1 base = `rate` quote |
+| rate | DECIMAL(18,6) | 1 base = `rate` quote |
 | rate_date | date NULL | NULL ⇒ the fixed fallback row |
 | source | text | `api` \| `fixed` |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 | UNIQUE(base, quote, rate_date) | | |
 
 **`expenses`**
@@ -150,7 +158,7 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | is_refund | boolean | true ⇒ negative/refund (anomaly #11) |
 | notes | text | |
 | import_row_id | uuid FK→import_rows NULL | provenance |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 **`expense_splits`** — one row per participating member; the line-item ledger that powers Rohan's drill-down.
 | column | type | notes |
@@ -158,9 +166,9 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | id | uuid PK | |
 | expense_id | uuid FK→expenses | |
 | member_id | uuid FK→group_members | |
-| raw_value | numeric(18,4) NULL | the unequal amount / % / share weight as given |
+| raw_value | DECIMAL(18,4) NULL | the unequal amount / % / share weight as given |
 | owed_minor | bigint | final amount this member owes, in base minor units |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 > Net balance for a member = Σ(`amount_minor` of expenses they paid) − Σ(`owed_minor` across all `expense_splits`) ± settlements. Every term traces to a row → Rohan's audit trail.
 
@@ -175,7 +183,7 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | settled_on | date | |
 | notes | text | |
 | import_row_id | uuid FK→import_rows NULL | provenance |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 **`imports`** — one per CSV upload.
 | column | type | notes |
@@ -185,8 +193,8 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | filename | text | |
 | status | enum | `pending`\|`reviewing`\|`committed`\|`aborted` |
 | created_by | uuid FK→users | |
-| created_at | timestamptz | |
-| committed_at | timestamptz NULL | |
+| created_at | TIMESTAMP | |
+| committed_at | TIMESTAMP NULL | |
 
 **`import_rows`** — staging; nothing financial is real until commit.
 | column | type | notes |
@@ -194,12 +202,12 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | id | uuid PK | |
 | import_id | uuid FK→imports | |
 | row_number | int | line in the CSV |
-| raw | jsonb | original parsed cells |
-| normalized | jsonb | post-normalization values |
+| raw | JSON | original parsed cells |
+| normalized | JSON | post-normalization values |
 | status | enum | `pending`\|`auto_resolved`\|`needs_review`\|`approved`\|`rejected` |
-| resolution | jsonb NULL | the human/auto decision applied |
+| resolution | JSON NULL | the human/auto decision applied |
 | target_kind | enum NULL | `expense`\|`settlement`\|`dropped` |
-| created_at | timestamptz | |
+| created_at | TIMESTAMP | |
 
 **`import_anomalies`** — the per-row findings that become the Import Report.
 | column | type | notes |
@@ -212,7 +220,7 @@ imports ──< import_rows >── import_anomalies      (staging / review)
 | suggested_action | text | |
 | chosen_action | text NULL | filled on resolution |
 | resolved_by | uuid FK→users NULL | |
-| resolved_at | timestamptz NULL | |
+| resolved_at | TIMESTAMP NULL | |
 
 ### 2.3 Key invariants enforced in code / constraints
 

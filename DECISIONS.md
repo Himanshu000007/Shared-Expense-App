@@ -151,8 +151,9 @@ A log of every significant product/engineering decision, the options considered,
 
 ## D15 — Deployment topology
 
-**Decision.** Frontend (Vite/React static build) on Vercel or Netlify; Express/Node API + managed PostgreSQL on Render or Railway. Rationale: free tiers, managed Postgres with backups, and independent scaling of static frontend vs API. Single public URL for the app (requirement #1), with the API behind `/api`.
+**Decision.** Frontend (Vite/React static build) on Vercel; Express/Node API + managed MySQL on Railway. Rationale: free tiers, managed MySQL with backups, and independent scaling of static frontend vs API. Single public URL for the app (requirement #1), with the API behind `/api`.
 
+Railway was chosen because it provides a managed MySQL instance, simple environment-variable configuration, automatic deployments from GitHub, and private networking between the API and database. Vercel provides fast deployment and hosting for the React frontend with minimal configuration.
 ---
 
 ## D16 — Pragmatic feature-file structure (not folder-per-layer MVC)
@@ -168,7 +169,7 @@ A log of every significant product/engineering decision, the options considered,
 A feature file is internally still ordered like layers (validation → data-access SQL → route handlers), so responsibilities stay clear, but it lives in one place you can read top-to-bottom. Cross-cutting concerns are single shared files. The heavy, gradable logic (import pipeline, split engine, balance engine) still gets its own file because it is complex and unit-tested — that is where isolation earns its keep.
 
 **Backend (Express) — flat structure:**
-- `db.js` — pg pool + `query()` helper (the only place SQL executes from).
+- `db.js` — mysql2 pool + `query()` helper (the only place SQL executes from).
 - `helpers.js` — `ApiError`, JWT sign/verify, `toPublicUser`, small utils.
 - `middleware.js` — `requireAuth`, `validate`, `errorHandler` together.
 - one file per feature — e.g. `auth.js` holds its zod schemas, its SQL data functions, and its router/handlers.
@@ -178,18 +179,22 @@ A feature file is internally still ordered like layers (validation → data-acce
 server/
   src/
     schema.sql      # hand-written SQL for all tables
-    db.js           # pg pool + query()
+    db.js           # mysql2 pool + query()
     helpers.js      # ApiError, signToken/verifyToken, toPublicUser
     middleware.js   # requireAuth + validate + errorHandler
     auth.js         # feature: schemas + SQL + router/handlers
-    groups.js       # (later) feature file
-    expenses.js     # (later) feature file
-    importPipeline.js / splitEngine.js / balanceEngine.js  # (later) complex core, isolated
+    groups.js       # feature file
+    expenses.js     # feature file
+    settlements.js  # feature file
+    balances.js     # feature file
+    import.js       # import API endpoints
+    importPipeline.js
+    splitEngine.js
+    balanceEngine.js
     app.js
     server.js
-  tests/            # unit tests for the complex core (split math, balances, detectors)
 ```
-Migrations run with `npm run db:migrate` — a tiny Node runner (`src/migrate.js`) that loads `.env` and executes `schema.sql` through the `pg` pool, so no `psql` or exported shell env is required.
+Migrations run with `npm run db:migrate` — a small Node runner (`src/migrate.js`) that loads `.env` automatically and executes `schema.sql` through the mysql2 connection pool. No external MySQL client or manually exported shell variables are required.
 
 **Frontend (React) — same spirit:**
 ```
@@ -223,7 +228,4 @@ client/
 
 ---
 
-## Open items to revisit during build
-- Exact pinned USD→INR fallback rate value (to be recorded in `exchange_rates` and the README).
-- Confidence threshold that separates auto-mapped vs review-required name aliases.
-- Whether Kabir's guest share is redistributed if the user excludes him (default: re-split among remaining participants).
+

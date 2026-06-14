@@ -12,9 +12,17 @@ Project docs: [`SCOPE.md`](SCOPE.md) (anomaly log + DB schema) · [`DECISIONS.md
 
 ---
 
+## Live Deployment
+
+Frontend:
+https://shared-expense-app-sand.vercel.app
+
+Backend:
+https://shared-expense-app-production.up.railway.app/
+
 ## 1. Prerequisites
 
-- **Node.js** ≥ 18 (developed on v25)
+- **Node.js** ≥ 18
 - **Homebrew** (macOS) — used to install MySQL below
 
 ---
