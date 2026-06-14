@@ -15,6 +15,8 @@ export const pool = mysql.createPool({
   password: decodeURIComponent(url.password),
   database: url.pathname.replace(/^\//, ''),
   dateStrings: true,
+  // Some managed MySQL hosts (Aiven, PlanetScale) require TLS. Set DB_SSL=true.
+  ...(process.env.DB_SSL === 'true' ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 
 // mysql2 returns [rows, fields]; we expose { rows } so callers read results the

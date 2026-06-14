@@ -28,4 +28,3 @@ export function allocateByWeights(totalMinor, weights) {
   for (let k = 0; k < leftover; k++) result[order[k].i] += 1;
   return result;
 }
-

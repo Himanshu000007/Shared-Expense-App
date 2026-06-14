@@ -244,4 +244,4 @@ node scripts/review.mjs   # proves a flagged row stays out of commit until appro
 - [x] Settlements + balances (net, simplified, itemized)
 - [x] CSV import + anomaly detection + review/approve + commit + Import Report
 - [x] Frontend (`client/`) — login, groups, members, expenses, balances, import review UI
-- [ ] Deployment (public URL)
+- [x] Deployment guide — see **[DEPLOYMENT.md](DEPLOYMENT.md)** (Railway API+MySQL · Vercel frontend)
