@@ -68,6 +68,9 @@ const money = (minor, cur) => `${cur} ${(minor / 100).toFixed(2)}`;
 function Members({ groupId, members, reload }) {
   const [form, setForm] = useState({ displayName: '', joinedAt: today(), isGuest: false });
   const [error, setError] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [edit, setEdit] = useState({ displayName: '', joinedAt: '', leftAt: '' });
+  const [confirmDel, setConfirmDel] = useState(null);
 
   const add = async (e) => {
     e.preventDefault();
@@ -79,16 +82,21 @@ function Members({ groupId, members, reload }) {
     } catch (err) { setError(err.message); }
   };
 
-  const [editId, setEditId] = useState(null);
-  const [editDate, setEditDate] = useState('');
-
-  const startEdit = (m) => { setError(''); setEditId(m.id); setEditDate(m.leftAt || today()); };
-  const saveLeft = async (m, value) => {
+  const startEdit = (m) => {
+    setError(''); setConfirmDel(null); setEditId(m.id);
+    setEdit({ displayName: m.displayName, joinedAt: m.joinedAt, leftAt: m.leftAt || '' });
+  };
+  const saveEdit = async (m) => {
     try {
-      await api.updateMember(groupId, m.id, { leftAt: value || null });
+      await api.updateMember(groupId, m.id, { displayName: edit.displayName, joinedAt: edit.joinedAt, leftAt: edit.leftAt || null });
       setEditId(null);
       await reload();
     } catch (err) { setError(err.message); }
+  };
+  const remove = async (m) => {
+    setError('');
+    try { await api.deleteMember(groupId, m.id); setConfirmDel(null); await reload(); }
+    catch (err) { setError(err.message); setConfirmDel(null); }
   };
 
   return (
@@ -119,30 +127,42 @@ function Members({ groupId, members, reload }) {
         <table>
           <thead><tr><th>Name</th><th>Joined</th><th>Left</th><th></th></tr></thead>
           <tbody>
-            {members.map((m) => (
+            {members.map((m) => editId === m.id ? (
+              <tr key={m.id}>
+                <td><input value={edit.displayName} onChange={(e) => setEdit({ ...edit, displayName: e.target.value })} style={{ maxWidth: 160 }} /></td>
+                <td><input type="date" value={edit.joinedAt} onChange={(e) => setEdit({ ...edit, joinedAt: e.target.value })} style={{ maxWidth: 160 }} /></td>
+                <td><input type="date" value={edit.leftAt} onChange={(e) => setEdit({ ...edit, leftAt: e.target.value })} style={{ maxWidth: 160 }} /></td>
+                <td style={{ textAlign: 'right' }}>
+                  <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                    <button className="small" onClick={() => saveEdit(m)}>Save</button>
+                    <button className="small ghost" onClick={() => setEdit({ ...edit, leftAt: '' })}>Clear left</button>
+                    <button className="small ghost" onClick={() => setEditId(null)}>Cancel</button>
+                  </div>
+                </td>
+              </tr>
+            ) : (
               <tr key={m.id}>
                 <td>{m.displayName} {m.isGuest && <span className="pill">guest</span>}</td>
                 <td>{m.joinedAt}</td>
-                <td>
-                  {editId === m.id
-                    ? <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} style={{ maxWidth: 175 }} />
-                    : (m.leftAt || '—')}
-                </td>
-                <td style={{ textAlign: 'right' }}>
-                  {editId === m.id ? (
+                <td>{m.leftAt || '—'}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {confirmDel === m.id ? (
                     <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
-                      <button className="small" onClick={() => saveLeft(m, editDate)}>Save</button>
-                      <button className="small ghost" onClick={() => saveLeft(m, '')}>Clear</button>
-                      <button className="small ghost" onClick={() => setEditId(null)}>Cancel</button>
+                      <button className="small danger" onClick={() => remove(m)}>Confirm delete</button>
+                      <button className="small ghost" onClick={() => setConfirmDel(null)}>Cancel</button>
                     </div>
                   ) : (
-                    <button className="ghost small" onClick={() => startEdit(m)}>Set leave date</button>
+                    <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                      <button className="small ghost" onClick={() => startEdit(m)}>Edit</button>
+                      <button className="small danger" onClick={() => { setError(''); setConfirmDel(m.id); }}>Delete</button>
+                    </div>
                   )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {error && <div className="error" style={{ marginTop: 10 }}>{error}</div>}
       </div>
     </>
   );
@@ -150,16 +170,37 @@ function Members({ groupId, members, reload }) {
 
 function Expenses({ groupId, group, members, nameById }) {
   const [expenses, setExpenses] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
   const load = useCallback(() => api.listExpenses(groupId).then((r) => setExpenses(r.expenses)).catch(() => {}), [groupId]);
   useEffect(() => { load(); }, [load]);
 
+  const startEdit = async (id) => {
+    try {
+      const { expense } = await api.getExpense(id);
+      setEditing(expense);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch { /* ignore */ }
+  };
+  const remove = async (id) => {
+    try {
+      await api.deleteExpense(id);
+      setConfirmDel(null);
+      if (editing?.id === id) setEditing(null);
+      await load();
+    } catch { /* ignore */ }
+  };
+
   return (
     <>
-      <AddExpense groupId={groupId} group={group} members={members} onCreated={load} />
+      <AddExpense
+        groupId={groupId} group={group} members={members}
+        onCreated={load} editing={editing} onDone={() => { setEditing(null); load(); }}
+      />
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Expenses</h2>
         <table>
-          <thead><tr><th>Date</th><th>Description</th><th>Paid by</th><th>Split</th><th style={{ textAlign: 'right' }}>Amount</th></tr></thead>
+          <thead><tr><th>Date</th><th>Description</th><th>Paid by</th><th>Split</th><th style={{ textAlign: 'right' }}>Amount</th><th></th></tr></thead>
           <tbody>
             {expenses.map((e) => (
               <tr key={e.id}>
@@ -173,9 +214,22 @@ function Expenses({ groupId, group, members, nameById }) {
                     <div className="muted" style={{ fontSize: 12 }}>{money(e.original_amount_minor, e.original_currency)}</div>
                   )}
                 </td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  {confirmDel === e.id ? (
+                    <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                      <button className="small danger" onClick={() => remove(e.id)}>Confirm</button>
+                      <button className="small ghost" onClick={() => setConfirmDel(null)}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+                      <button className="small ghost" onClick={() => startEdit(e.id)}>Edit</button>
+                      <button className="small danger" onClick={() => setConfirmDel(e.id)}>Delete</button>
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
-            {expenses.length === 0 && <tr><td colSpan={5} className="muted">No expenses yet.</td></tr>}
+            {expenses.length === 0 && <tr><td colSpan={6} className="muted">No expenses yet.</td></tr>}
           </tbody>
         </table>
       </div>

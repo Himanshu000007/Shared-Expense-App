@@ -23,6 +23,7 @@ const addMemberSchema = z.object({
 
 const updateMemberSchema = z.object({
   leftAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'use YYYY-MM-DD').nullable().optional(),
+  joinedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'use YYYY-MM-DD').optional(),
   displayName: z.string().trim().min(1).max(80).optional(),
 });
 
@@ -165,6 +166,7 @@ router.patch('/:id/members/:memberId', validate(updateMemberSchema), async (req,
     const fields = [];
     const params = [];
     if ('leftAt' in req.body) { fields.push('left_at = ?'); params.push(req.body.leftAt); }
+    if (req.body.joinedAt) { fields.push('joined_at = ?'); params.push(req.body.joinedAt); }
     if (req.body.displayName) { fields.push('display_name = ?'); params.push(req.body.displayName); }
     if (fields.length === 0) throw new ApiError(400, 'nothing to update');
 
@@ -177,6 +179,28 @@ router.patch('/:id/members/:memberId', validate(updateMemberSchema), async (req,
 
     const { rows } = await query('SELECT * FROM group_members WHERE id = ?', [req.params.memberId]);
     res.json({ member: publicMember(rows[0]) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Delete a member — blocked if they appear in any expense or settlement, so we
+// never leave dangling references. (Set a leave date instead in that case.)
+router.delete('/:id/members/:memberId', async (req, res, next) => {
+  try {
+    await assertGroupAccess(req.params.id, req.userId);
+    const mid = req.params.memberId;
+    const [paid, owed, settled] = await Promise.all([
+      query('SELECT 1 FROM expenses WHERE paid_by = ? LIMIT 1', [mid]),
+      query('SELECT 1 FROM expense_splits WHERE member_id = ? LIMIT 1', [mid]),
+      query('SELECT 1 FROM settlements WHERE from_member = ? OR to_member = ? LIMIT 1', [mid, mid]),
+    ]);
+    if (paid.rows.length || owed.rows.length || settled.rows.length) {
+      throw new ApiError(400, 'This member is referenced by expenses or settlements. Set a leave date instead, or remove those first.');
+    }
+    const { rows } = await query('DELETE FROM group_members WHERE id = ? AND group_id = ?', [mid, req.params.id]);
+    if (rows.affectedRows === 0) throw new ApiError(404, 'Member not found');
+    res.json({ deleted: true });
   } catch (err) {
     next(err);
   }

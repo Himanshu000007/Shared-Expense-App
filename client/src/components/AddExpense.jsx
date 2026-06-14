@@ -1,27 +1,48 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { CURRENCIES } from '../currencies.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-// Hint shown next to per-member inputs for each split type.
 const DETAIL_HINT = {
   unequal: 'exact amount each owes',
   percentage: 'percent each owes (must total 100)',
   share: 'relative share weight (e.g. 1, 2)',
 };
 
-export default function AddExpense({ groupId, group, members, onCreated }) {
+// `editing` (an expense with .splits) puts the form into edit mode.
+export default function AddExpense({ groupId, group, members, onCreated, editing, onDone }) {
+  const isEdit = !!editing;
   const blank = {
     description: '', paidBy: '', amount: '', currency: group.base_currency,
     splitType: 'equal', expenseDate: today(), isRefund: false,
   };
   const [form, setForm] = useState(blank);
-  const [participants, setParticipants] = useState([]); // member ids
-  const [details, setDetails] = useState({}); // memberId -> value
+  const [participants, setParticipants] = useState([]);
+  const [details, setDetails] = useState({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Load the expense being edited into the form.
+  useEffect(() => {
+    if (!editing) return;
+    setForm({
+      description: editing.description,
+      paidBy: editing.paid_by,
+      amount: String(editing.original_amount_minor / 100),
+      currency: editing.original_currency,
+      splitType: editing.split_type,
+      expenseDate: editing.expense_date,
+      isRefund: !!editing.is_refund,
+    });
+    setParticipants(editing.splits.map((s) => s.member_id));
+    const d = {};
+    editing.splits.forEach((s) => { if (s.raw_value != null) d[s.member_id] = s.raw_value; });
+    setDetails(d);
+    setError('');
+  }, [editing]);
+
+  const reset = () => { setForm(blank); setParticipants([]); setDetails({}); };
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   const toggle = (mid) => setParticipants((p) => p.includes(mid) ? p.filter((x) => x !== mid) : [...p, mid]);
 
@@ -44,9 +65,14 @@ export default function AddExpense({ groupId, group, members, onCreated }) {
       if (form.splitType !== 'equal') {
         body.details = Object.fromEntries(participants.map((id) => [id, Number(details[id] ?? 0)]));
       }
-      await api.createExpense(groupId, body);
-      setForm(blank); setParticipants([]); setDetails({});
-      await onCreated();
+      if (isEdit) {
+        await api.updateExpense(editing.id, body);
+        onDone?.();
+      } else {
+        await api.createExpense(groupId, body);
+        reset();
+        await onCreated();
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -54,9 +80,11 @@ export default function AddExpense({ groupId, group, members, onCreated }) {
     }
   };
 
+  const cancelEdit = () => { reset(); onDone?.(); };
+
   return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>Add expense</h2>
+    <div className="card" id="expense-form">
+      <h2 style={{ marginTop: 0 }}>{isEdit ? 'Edit expense' : 'Add expense'}</h2>
       <form onSubmit={submit}>
         <div className="row">
           <div style={{ flex: 2 }}>
@@ -132,7 +160,10 @@ export default function AddExpense({ groupId, group, members, onCreated }) {
         </div>
 
         {error && <div className="error">{error}</div>}
-        <div style={{ marginTop: 12 }}><button disabled={busy}>{busy ? 'Saving…' : 'Add expense'}</button></div>
+        <div className="row" style={{ marginTop: 12, gap: 8 }}>
+          <div style={{ flex: 'none' }}><button disabled={busy}>{busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add expense'}</button></div>
+          {isEdit && <div style={{ flex: 'none' }}><button type="button" className="ghost" onClick={cancelEdit}>Cancel</button></div>}
+        </div>
       </form>
     </div>
   );

@@ -38,10 +38,14 @@ export const api = {
   getGroup: (id) => request('GET', `/groups/${id}`),
   addMember: (id, b) => request('POST', `/groups/${id}/members`, b),
   updateMember: (id, mid, b) => request('PATCH', `/groups/${id}/members/${mid}`, b),
+  deleteMember: (id, mid) => request('DELETE', `/groups/${id}/members/${mid}`),
 
   // expenses
   listExpenses: (id) => request('GET', `/groups/${id}/expenses`),
+  getExpense: (expenseId) => request('GET', `/expenses/${expenseId}`),
   createExpense: (id, b) => request('POST', `/groups/${id}/expenses`, b),
+  updateExpense: (expenseId, b) => request('PATCH', `/expenses/${expenseId}`, b),
+  deleteExpense: (expenseId) => request('DELETE', `/expenses/${expenseId}`),
 
   // settlements
   listSettlements: (id) => request('GET', `/groups/${id}/settlements`),

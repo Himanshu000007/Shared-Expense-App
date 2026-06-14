@@ -1,5 +1,5 @@
-// Expenses feature — create/list/read expenses with all four split types,
-// multi-currency conversion, and time-bounded membership validation.
+// Expenses feature — create / list / read / edit / delete, with all four split
+// types, multi-currency conversion, and time-bounded membership validation.
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -12,7 +12,7 @@ import { computeSplits } from './splitEngine.js';
 import { toMinor } from './money.js';
 
 // --- 1. validation ---------------------------------------------------------
-const createExpenseSchema = z.object({
+const expenseSchema = z.object({
   description: z.string().trim().min(1, 'required').max(255),
   paidBy: z.string().uuid('paidBy must be a member id'),
   amount: z.number().positive('amount must be > 0'),
@@ -25,7 +25,29 @@ const createExpenseSchema = z.object({
   isRefund: z.boolean().optional(),
 });
 
-// --- 2. data shaping -------------------------------------------------------
+// --- 2. shared validate + compute (used by create AND edit) ----------------
+async function prepareExpense(group, body, members) {
+  const byId = new Map(members.map((m) => [m.id, m]));
+  for (const id of [body.paidBy, ...body.splitWith]) {
+    const m = byId.get(id);
+    if (!m) throw new ApiError(400, `member ${id} is not in this group`);
+    if (!isActiveOn(m, body.expenseDate)) {
+      throw new ApiError(400, `${m.display_name} was not a member on ${body.expenseDate}`);
+    }
+  }
+  const currency = body.currency || group.base_currency;
+  const originalMinor = toMinor(body.amount);
+  const { rate, fxRateId } = await getRate(currency, group.base_currency, body.expenseDate);
+  const amountMinor = Math.round(originalMinor * rate);
+  const splits = computeSplits({
+    splitType: body.splitType,
+    amountMinor,
+    participants: body.splitWith,
+    details: body.details || {},
+  });
+  return { currency, originalMinor, fxRateId, amountMinor, splits };
+}
+
 async function loadExpenseWithSplits(expenseId) {
   const { rows: e } = await query('SELECT * FROM expenses WHERE id = ?', [expenseId]);
   if (!e[0]) return null;
@@ -36,42 +58,25 @@ async function loadExpenseWithSplits(expenseId) {
   return { ...e[0], splits };
 }
 
+async function insertSplits(conn, expenseId, splits) {
+  for (const s of splits) {
+    await conn.query(
+      'INSERT INTO expense_splits (id, expense_id, member_id, raw_value, owed_minor) VALUES (?, ?, ?, ?, ?)',
+      [randomUUID(), expenseId, s.memberId, s.rawValue, s.owedMinor]
+    );
+  }
+}
+
 // --- 3. routes -------------------------------------------------------------
 const router = Router();
 router.use(requireAuth);
 
-// Create an expense in a group.
-router.post('/groups/:id/expenses', validate(createExpenseSchema), async (req, res, next) => {
+// Create.
+router.post('/groups/:id/expenses', validate(expenseSchema), async (req, res, next) => {
   try {
     const group = await assertGroupAccess(req.params.id, req.userId);
-    const body = req.body;
-
-    // All participants (incl. payer) must be members of THIS group...
     const members = await loadMembers(group.id);
-    const byId = new Map(members.map((m) => [m.id, m]));
-    const everyone = [body.paidBy, ...body.splitWith];
-    for (const id of everyone) {
-      const m = byId.get(id);
-      if (!m) throw new ApiError(400, `member ${id} is not in this group`);
-      // ...and active on the expense date (Sam/Meera time-bounded rule).
-      if (!isActiveOn(m, body.expenseDate)) {
-        throw new ApiError(400, `${m.display_name} was not a member on ${body.expenseDate}`);
-      }
-    }
-
-    // Convert to the group's base currency.
-    const currency = body.currency || group.base_currency;
-    const originalMinor = toMinor(body.amount);
-    const { rate, fxRateId } = await getRate(currency, group.base_currency, body.expenseDate);
-    const amountMinor = Math.round(originalMinor * rate);
-
-    // Compute per-member owed amounts (throws 400 on bad split spec).
-    const splits = computeSplits({
-      splitType: body.splitType,
-      amountMinor,
-      participants: body.splitWith,
-      details: body.details || {},
-    });
+    const { currency, originalMinor, fxRateId, amountMinor, splits } = await prepareExpense(group, req.body, members);
 
     const expenseId = randomUUID();
     await withTransaction(async (conn) => {
@@ -80,19 +85,10 @@ router.post('/groups/:id/expenses', validate(createExpenseSchema), async (req, r
            (id, group_id, description, paid_by, original_amount_minor, original_currency,
             fx_rate_id, amount_minor, split_type, expense_date, is_refund, notes)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          expenseId, group.id, body.description, body.paidBy, originalMinor, currency,
-          fxRateId, amountMinor, body.splitType, body.expenseDate, body.isRefund ? 1 : 0,
-          body.notes || null,
-        ]
+        [expenseId, group.id, req.body.description, req.body.paidBy, originalMinor, currency,
+         fxRateId, amountMinor, req.body.splitType, req.body.expenseDate, req.body.isRefund ? 1 : 0, req.body.notes || null]
       );
-      for (const s of splits) {
-        await conn.query(
-          `INSERT INTO expense_splits (id, expense_id, member_id, raw_value, owed_minor)
-           VALUES (?, ?, ?, ?, ?)`,
-          [randomUUID(), expenseId, s.memberId, s.rawValue, s.owedMinor]
-        );
-      }
+      await insertSplits(conn, expenseId, splits);
     });
 
     res.status(201).json({ expense: await loadExpenseWithSplits(expenseId) });
@@ -101,7 +97,47 @@ router.post('/groups/:id/expenses', validate(createExpenseSchema), async (req, r
   }
 });
 
-// List a group's expenses (newest first).
+// Edit — re-validates and recomputes splits, replacing the old ones.
+router.patch('/expenses/:expenseId', validate(expenseSchema), async (req, res, next) => {
+  try {
+    const existing = await loadExpenseWithSplits(req.params.expenseId);
+    if (!existing) throw new ApiError(404, 'Expense not found');
+    const group = await assertGroupAccess(existing.group_id, req.userId);
+    const members = await loadMembers(group.id);
+    const { currency, originalMinor, fxRateId, amountMinor, splits } = await prepareExpense(group, req.body, members);
+
+    await withTransaction(async (conn) => {
+      await conn.query(
+        `UPDATE expenses SET description = ?, paid_by = ?, original_amount_minor = ?, original_currency = ?,
+           fx_rate_id = ?, amount_minor = ?, split_type = ?, expense_date = ?, is_refund = ?, notes = ?
+         WHERE id = ?`,
+        [req.body.description, req.body.paidBy, originalMinor, currency, fxRateId, amountMinor,
+         req.body.splitType, req.body.expenseDate, req.body.isRefund ? 1 : 0, req.body.notes || null, req.params.expenseId]
+      );
+      await conn.query('DELETE FROM expense_splits WHERE expense_id = ?', [req.params.expenseId]);
+      await insertSplits(conn, req.params.expenseId, splits);
+    });
+
+    res.json({ expense: await loadExpenseWithSplits(req.params.expenseId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Delete (splits cascade via FK).
+router.delete('/expenses/:expenseId', async (req, res, next) => {
+  try {
+    const { rows } = await query('SELECT group_id FROM expenses WHERE id = ?', [req.params.expenseId]);
+    if (!rows[0]) throw new ApiError(404, 'Expense not found');
+    await assertGroupAccess(rows[0].group_id, req.userId);
+    await query('DELETE FROM expenses WHERE id = ?', [req.params.expenseId]);
+    res.json({ deleted: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// List.
 router.get('/groups/:id/expenses', async (req, res, next) => {
   try {
     await assertGroupAccess(req.params.id, req.userId);
